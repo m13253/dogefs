@@ -6,8 +6,8 @@ namespace DogeFS {
 
 static inline uint64_t allocateBlock(std::FILE *devFile, SuperBlock *super, BlockType type) {
     SpaceMap *spacemap = (SpaceMap *) new char[super->blockSize];
-    for(uint64_t i = super->ptrSpaceMap; i < super->ptrSpaceMap + super->blkSpaceMap; ++i) {
-        if(freadat(devFile, spacemap, i * super->blockSize, super->blockSize) <= 0) {
+    for(uint64_t i = 0; i < super->blkSpaceMap; ++i) {
+        if(freadat(devFile, spacemap, (i + super->ptrSpaceMap) * super->blockSize, super->blockSize) <= 0) {
             std::perror("Read error");
             delete[] spacemap;
             return 0;
@@ -23,7 +23,7 @@ static inline uint64_t allocateBlock(std::FILE *devFile, SuperBlock *super, Bloc
                 } else {
                     spacemap[j].itemsLeft = type;
                 }
-                if(fwriteat(devFile, spacemap, i * super->blockSize, super->blockSize) <= 0) {
+                if(fwriteat(devFile, spacemap, (i + super->ptrSpaceMap) * super->blockSize, super->blockSize) <= 0) {
                     std::perror("Write error");
                     delete[] spacemap;
                     return 0;
@@ -39,8 +39,8 @@ static inline uint64_t allocateBlock(std::FILE *devFile, SuperBlock *super, Bloc
 
 static inline uint64_t allocateInode(std::FILE *devFile, SuperBlock *super) {
     SpaceMap *spacemap = (SpaceMap *) new char[super->blockSize];
-    for(uint64_t i = super->ptrSpaceMap; i < super->ptrSpaceMap + super->blkSpaceMap; ++i) {
-        if(freadat(devFile, spacemap, i * super->blockSize, super->blockSize) <= 0) {
+    for(uint64_t i = 0; i < super->blkSpaceMap; ++i) {
+        if(freadat(devFile, spacemap, (i + super->ptrSpaceMap) * super->blockSize, super->blockSize) <= 0) {
             std::perror("Read error");
             delete[] spacemap;
             return 0;
@@ -50,7 +50,7 @@ static inline uint64_t allocateInode(std::FILE *devFile, SuperBlock *super) {
             if(spacemap[j].blockType == BLK_INODE && spacemap[j].itemsLeft != 0) {
                 uint8_t itemsLeft = spacemap[j].itemsLeft;
                 spacemap[j].itemsLeft = itemsLeft - 1;
-                if(fwriteat(devFile, spacemap, i * super->blockSize, super->blockSize) <= 0) {
+                if(fwriteat(devFile, spacemap, (i + super->ptrSpaceMap) * super->blockSize, super->blockSize) <= 0) {
                     std::perror("Write error");
                     delete[] spacemap;
                     return 0;
@@ -68,7 +68,7 @@ static inline uint64_t allocateDirItem(std::FILE *devFile, SuperBlock *super, ui
     size_t i = blockID / (super->blockSize / sizeof (SpaceMap));
     size_t j = blockID % (super->blockSize / sizeof (SpaceMap));
     SpaceMap *spacemap = (SpaceMap *) new char[super->blockSize];
-    if(freadat(devFile, spacemap, i * super->blockSize, super->blockSize) <= 0) {
+    if(freadat(devFile, spacemap, (i + super->ptrSpaceMap) * super->blockSize, super->blockSize) <= 0) {
         std::perror("Read error");
         delete[] spacemap;
         return 0;
@@ -76,7 +76,7 @@ static inline uint64_t allocateDirItem(std::FILE *devFile, SuperBlock *super, ui
     if(spacemap[j].blockType == BLK_DIR && spacemap[j].itemsLeft != 0) {
         uint8_t itemsLeft = spacemap[j].itemsLeft;
         spacemap[j].itemsLeft = itemsLeft - 1;
-        if(fwriteat(devFile, spacemap, i * super->blockSize, super->blockSize) <= 0) {
+        if(fwriteat(devFile, spacemap, (i + super->ptrSpaceMap) * super->blockSize, super->blockSize) <= 0) {
             std::perror("Write error");
             delete[] spacemap;
             return 0;

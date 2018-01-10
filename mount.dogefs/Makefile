@@ -9,7 +9,7 @@ all: mount.dogefs
 clean:
 	rm -f mount.dogefs
 
-mount.dogefs: main.cpp ../common/types.h ../common/utils.h
+mount.dogefs: main.cpp ../common/spacemap.h ../common/types.h ../common/utils.h
 	$(CXX) $(CXXFLAGS) -o $@ $< $(LIBS)
 
 bootsect.bin: bootsect.s

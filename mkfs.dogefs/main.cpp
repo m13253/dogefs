@@ -67,7 +67,7 @@ int main(int argc, char *argv[]) {
 
     std::printf("Writing %" PRIu64 " space map block(s)...\n", super->blkSpaceMap);
     SpaceMap *spacemap = (SpaceMap *) new char[blockSize];
-    for(uint64_t i = super->ptrSpaceMap; i < super->ptrSpaceMap + super->blkSpaceMap; ++i) {
+    for(uint64_t i = 0; i < super->blkSpaceMap; ++i) {
         for(uint64_t j = 0; j < blockSize / sizeof (SpaceMap); ++j) {
             uint64_t targetBlock = i * (blockSize / sizeof (SpaceMap)) + j;
             if(targetBlock >= blockCount) {
@@ -93,7 +93,7 @@ int main(int argc, char *argv[]) {
                 spacemap[j].itemsLeft = BLK_UNUSED;
             }
         }
-        if(fwriteat(devFile, spacemap, i * blockSize, blockSize) <= 0) {
+        if(fwriteat(devFile, spacemap, (i + super->ptrSpaceMap) * blockSize, blockSize) <= 0) {
             std::perror("Write error");
             return 1;
         }
