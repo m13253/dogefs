@@ -10,6 +10,9 @@ constexpr uint64_t defaultBlockSize = 4096;
 constexpr uint64_t defaultMinimumBlocks = 4096;
 constexpr uint64_t defaultJournalBlocks = 256;
 
+static const uint8_t bootJump[16] = {0xe9, 0x83, 0x00, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc};
+static const uint8_t bootCode[64] = {0x45, 0x72, 0x72, 0x6f, 0x72, 0x3a, 0x20, 0x54, 0x68, 0x69, 0x73, 0x20, 0x64, 0x65, 0x76, 0x69, 0x63, 0x65, 0x20, 0x69, 0x73, 0x20, 0x6e, 0x6f, 0x74, 0x20, 0x62, 0x6f, 0x6f, 0x74, 0x61, 0x62, 0x6c, 0x65, 0x2e, 0x0d, 0x0a, 0x00, 0x31, 0xc0, 0x8e, 0xd8, 0xbe, 0x60, 0x7c, 0xac, 0x08, 0xc0, 0x74, 0x06, 0xb4, 0x0e, 0xcd, 0x10, 0xeb, 0xf5, 0xf4, 0xeb, 0xfd, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc};
+
 using namespace DogeFS;
 
 int main(int argc, char *argv[]) {
@@ -34,7 +37,8 @@ int main(int argc, char *argv[]) {
     }
 
     SuperBlock *super = (SuperBlock *) new char[blockSize];
-    std::memset(super->bootJump, 0xcc, blockSize);
+    std::memset(super, 0, blockSize);
+    std::memcpy(super->bootJump, bootJump, sizeof bootJump);
     super->magic = SuperBlockMagic;
     super->version[0] = 1;
     super->version[1] = 0;
@@ -49,6 +53,7 @@ int main(int argc, char *argv[]) {
     uint64_t ptrRootInodeBlock = super->ptrSpaceMap + super->blkSpaceMap;
     uint64_t ptrRootDirBlock = ptrRootInodeBlock + 1;
     super->ptrRootInode = ptrRootInodeBlock * (blockSize / sizeof (DirItem));
+    std::memcpy(super->bootCode, bootCode, sizeof bootCode);
     std::printf("Writing superblocks at block:");
     for(uint64_t i = 0; i < super->ptrJournal; i += 256) {
         std::printf(" %zu", i);

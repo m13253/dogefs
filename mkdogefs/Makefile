@@ -9,3 +9,6 @@ clean:
 
 mkdogefs: main.cpp ../common/types.h ../common/utils.h
 	$(CXX) $(CXXFLAGS) -o $@ $< $(LIBS)
+
+bootsect.bin: bootsect.s
+	nasm -f bin -o $@ $<
