@@ -55,7 +55,7 @@ int main(int argc, char *argv[]) {
     super->ptrRootInode = ptrRootInodeBlock * (blockSize / sizeof (DirItem));
     std::memcpy(super->bootCode, bootCode, sizeof bootCode);
     std::printf("Writing superblocks at block:");
-    for(uint64_t i = 0; i < super->ptrJournal; i += 256) {
+    for(uint64_t i = 0; i < super->ptrJournal; i += 1024) {
         std::printf(" %zu", i);
         if(fwriteat(devFile, super, i * blockSize, blockSize) <= 0) {
             std::puts("");
