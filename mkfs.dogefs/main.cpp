@@ -52,7 +52,7 @@ int main(int argc, char *argv[]) {
     super->ptrLabelDirectory = 0;
     uint64_t ptrRootInodeBlock = super->ptrSpaceMap + super->blkSpaceMap;
     uint64_t ptrRootDirBlock = ptrRootInodeBlock + 1;
-    super->ptrRootInode = ptrRootInodeBlock * (blockSize / sizeof (DirItem));
+    super->ptrRootInode = ptrRootInodeBlock * (blockSize / sizeof (Inode));
     std::memcpy(super->bootCode, bootCode, sizeof bootCode);
     std::printf("Writing superblocks at block:");
     for(uint64_t i = 0; i < super->ptrJournal; i += 1024) {
@@ -106,7 +106,7 @@ int main(int argc, char *argv[]) {
     inode[0].mode = 0040755;
     inode[0].nlink = 2;
     inode[0].size = blockSize;
-    inode[0].ptrDirect[0] = ptrRootDirBlock * (blockSize / sizeof (DirItem));
+    inode[0].ptrDirect[0] = ptrRootDirBlock;
     if(fwriteat(devFile, inode, ptrRootInodeBlock * blockSize, blockSize) <= 0) {
         std::perror("Write error");
         return 1;

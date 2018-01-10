@@ -1,152 +1,210 @@
+#include <cerrno>
 #include <cinttypes>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <fuse_lowlevel.h>
 #include <string>
+#include <sys/types.h>
+#include <sys/stat.h>
 #include <unistd.h>
 #include "../common/types.h"
 
-constexpr uint64_t defaultBlockSize = 4096;
-constexpr uint64_t defaultMinimumBlocks = 4096;
-constexpr uint64_t defaultJournalBlocks = 256;
-
-static const uint8_t bootJump[16] = {0xe9, 0x83, 0x00, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc};
-static const uint8_t bootCode[64] = {0x45, 0x72, 0x72, 0x6f, 0x72, 0x3a, 0x20, 0x54, 0x68, 0x69, 0x73, 0x20, 0x64, 0x65, 0x76, 0x69, 0x63, 0x65, 0x20, 0x69, 0x73, 0x20, 0x6e, 0x6f, 0x74, 0x20, 0x62, 0x6f, 0x6f, 0x74, 0x61, 0x62, 0x6c, 0x65, 0x2e, 0x0d, 0x0a, 0x00, 0x31, 0xc0, 0x8e, 0xd8, 0xbe, 0x60, 0x7c, 0xac, 0x08, 0xc0, 0x74, 0x06, 0xb4, 0x0e, 0xcd, 0x10, 0xeb, 0xf5, 0xf4, 0xeb, 0xfd, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc};
-
 using namespace DogeFS;
 
+std::FILE *g_devFile = nullptr;
+SuperBlock *g_super = nullptr;
+
+static int dogefs_stat(uint64_t ino, struct stat *statbuf) {
+    std::printf("stat(%" PRIu64 ", ...)\n", ino);
+    uint64_t realInode = ino == 1 ? g_super->ptrRootInode : ino;
+    Inode inode;
+    if(freadat(g_devFile, &inode, realInode * sizeof (Inode), sizeof (Inode)) <= 0) {
+        perror("Read error");
+        return -1;
+    }
+    std::memset(statbuf, 0, sizeof (struct stat));
+    statbuf->st_ino = realInode;
+    statbuf->st_mode = inode.mode;
+    statbuf->st_nlink = inode.nlink;
+    statbuf->st_uid = inode.uid;
+    statbuf->st_gid = inode.gid;
+    if((inode.mode & 0170000) == 0060000 || (inode.mode & 0170000) == 0020000) {
+        statbuf->st_rdev = inode.devMajor * 0x100000000 | inode.devMinor;
+    } else {
+        statbuf->st_size = inode.size;
+        statbuf->st_blocks = inode.size > 64 ? ceilDiv(inode.size, g_super->blockSize) * (g_super->blockSize / 512) : 0;
+    }
+    return 0;
+}
+
+static void dogefs_lookup(fuse_req_t req, fuse_ino_t parent, const char *name) {
+    std::printf("lookup(..., %" PRIu64 ", \"%s\")\n", parent, name);
+    if(parent == 1) {
+        parent = g_super->ptrRootInode;
+    }
+    Inode inode;
+    if(freadat(g_devFile, &inode, parent * sizeof (Inode), sizeof (Inode)) <= 0) {
+        perror("Read error");
+        fuse_reply_err(req, EIO);
+        return;
+    }
+    if((inode.mode & 0170000) != 0040000) {
+        fuse_reply_err(req, ENOTDIR);
+        return;
+    }
+    uint64_t dirBlock = inode.ptrDirect[0];
+    DirItem *dir = (DirItem *) new char[g_super->blockSize];
+    if(freadat(g_devFile, dir, dirBlock * g_super->blockSize, g_super->blockSize) <= 0) {
+        perror("Read error");
+        fuse_reply_err(req, EIO);
+        return;
+    }
+    fuse_entry_param e;
+    std::memset(&e, 0, sizeof e);
+    for(size_t i = 0; i < g_super->blockSize / sizeof (DirItem); ++i) {
+        if(dir[i].magic != DirItemMagic) {
+            continue;
+        }
+        if(strncpy(dir[i].filename, name, 32) == 0) {
+            if(dogefs_stat(dir[i].inode, &e.attr) < 0) {
+                fuse_reply_err(req, EIO);
+            } else {
+                e.ino = e.attr.st_ino;
+                e.attr_timeout = 1.0;
+                e.entry_timeout = 1.0;
+                fuse_reply_entry(req, &e);
+            }
+            goto end;
+        }
+    }
+    fuse_reply_err(req, ENOENT);
+end:
+    delete[] dir;
+}
+
+static void dogefs_getattr(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *) {
+    std::printf("getattr(..., %" PRIu64 ", ...)\n", ino);
+    struct stat stbuf;
+    if(dogefs_stat(ino, &stbuf) < 0) {
+        fuse_reply_err(req, EIO);
+    } else {
+        fuse_reply_attr(req, &stbuf, 1.0);
+    }
+}
+
+static void dogefs_readdir(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off, struct fuse_file_info *) {
+    std::printf("readdir(..., %" PRIu64 ", %" PRIu64 ", %" PRIu64 ")\n", ino, size, off);
+    if(ino == 1) {
+        ino = g_super->ptrRootInode;
+    }
+    Inode inode;
+    if(freadat(g_devFile, &inode, ino * sizeof (Inode), sizeof (Inode)) <= 0) {
+        perror("Read error");
+        fuse_reply_err(req, EIO);
+        return;
+    }
+    if((inode.mode & 0170000) != 0040000) {
+        fuse_reply_err(req, ENOTDIR);
+        return;
+    }
+    uint64_t dirBlock = inode.ptrDirect[0];
+    DirItem *dir = (DirItem *) new char[g_super->blockSize];
+    if(freadat(g_devFile, dir, dirBlock * g_super->blockSize, g_super->blockSize) <= 0) {
+        perror("Read error");
+        fuse_reply_err(req, EIO);
+        return;
+    }
+    std::string result;
+    for(size_t i = 0; i < g_super->blockSize / sizeof (DirItem); ++i) {
+        if(dir[i].magic != DirItemMagic) {
+            continue;
+        }
+        struct stat stbuf;
+        if(dogefs_stat(dir[i].inode, &stbuf) < 0) {
+            fuse_reply_err(req, EIO);
+            goto end;
+        }
+        size_t entrySize = fuse_add_direntry(req, nullptr, 0, dir[i].filename, nullptr, 0);
+        char *buf = new char[entrySize];
+        fuse_add_direntry(req, buf, 1024, dir[i].filename, &stbuf, result.length() + entrySize);
+        result.append(buf, entrySize);
+        delete[] buf;
+    }
+    std::fwrite(result.data(), result.length(), 1, stdout);
+    std::puts("");
+    if(off >= result.length()) {
+        fuse_reply_buf(req, nullptr, 0);
+    } else {
+        fuse_reply_buf(req, result.data() + off, std::min(result.length(), size));
+    }
+end:
+    delete[] dir;
+}
+
+static void dogefs_open(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi) {
+    std::printf("open(..., %" PRIu64 ", ...)\n", ino);
+    fuse_reply_open(req, fi);
+}
+
+static void dogefs_read(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off, struct fuse_file_info *) {
+    std::printf("read(..., %" PRIu64 ", %" PRIu64 ", %" PRIu64 ", ...)\n", ino, size, off);
+    fuse_reply_buf(req, nullptr, 0);
+}
+
+static fuse_lowlevel_ops dogefs_oper = {
+    .lookup  = dogefs_lookup,
+    .getattr = dogefs_getattr,
+    .readdir = dogefs_readdir,
+    .open    = dogefs_open,
+    .read    = dogefs_read,
+};
+
 int main(int argc, char *argv[]) {
-    if(argc != 2 || argv[1] == std::string("--help")) {
-        std::puts("Usage: mkdogefs DEVFILE\n");
+    if(argc != 3 || argv[1] == std::string("--help")) {
+        std::puts("Usage: mkdogefs DEVFILE MOUNTPOINT\n");
         return 0;
     }
     std::string device = argv[1];
-    std::FILE *devFile = std::fopen(device.c_str(), "r+b");
-    if(!devFile) {
+    std::string mountpoint = argv[2];
+    g_devFile = std::fopen(device.c_str(), "r+b");
+    if(!g_devFile) {
         std::perror("Failed to open the device");
         return 1;
     }
-    fseeko(devFile, 0, SEEK_END);
-    uint64_t devSize = (uint64_t) ftello(devFile);
-    uint64_t blockSize = defaultBlockSize;
-    uint64_t blockCount = devSize / blockSize;
-    std::printf("Device size: %.1lf MiB (%" PRIu64 " blocks)\n", devSize / 1048576., blockCount);
-    if(blockCount < defaultMinimumBlocks) {
-        std::puts("Error: Device less than 16 MiB.");
+    g_super = new SuperBlock;
+    if(freadat(g_devFile, g_super, 0, sizeof (SuperBlock)) <= 0) {
+        perror("Read error");
+        return 1;
+    }
+    if(g_super->magic != SuperBlockMagic) {
+        std::fprintf(stderr, "Not a DogeFS filesystem.\n");
         return 1;
     }
 
-    SuperBlock *super = (SuperBlock *) new char[blockSize];
-    std::memset(super, 0, blockSize);
-    std::memcpy(super->bootJump, bootJump, sizeof bootJump);
-    super->magic = SuperBlockMagic;
-    super->version[0] = 1;
-    super->version[1] = 0;
-    super->inUseCount = 0;
-    super->blockSize = blockSize;
-    super->blockCount = blockCount;
-    super->ptrSpaceMap = 1;
-    super->blkSpaceMap = ceilDiv(blockCount, blockSize / sizeof (SpaceMap));
-    super->ptrJournal = blockCount - defaultJournalBlocks;
-    super->blkJournal = defaultJournalBlocks;
-    super->ptrLabelDirectory = 0;
-    uint64_t ptrRootInodeBlock = super->ptrSpaceMap + super->blkSpaceMap;
-    uint64_t ptrRootDirBlock = ptrRootInodeBlock + 1;
-    super->ptrRootInode = ptrRootInodeBlock * (blockSize / sizeof (DirItem));
-    std::memcpy(super->bootCode, bootCode, sizeof bootCode);
-    std::printf("Writing superblocks at block:");
-    for(uint64_t i = 0; i < super->ptrJournal; i += 1024) {
-        std::printf(" %zu", i);
-        if(fwriteat(devFile, super, i * blockSize, blockSize) <= 0) {
-            std::puts("");
-            std::perror("Write error");
-            return 1;
-        }
-    }
-    std::puts("");
-
-    std::printf("Writing %" PRIu64 " space map block(s)...\n", super->blkSpaceMap);
-    SpaceMap *spacemap = (SpaceMap *) new char[blockSize];
-    for(uint64_t i = super->ptrSpaceMap; i < super->ptrSpaceMap + super->blkSpaceMap; ++i) {
-        for(uint64_t j = 0; j < blockSize / sizeof (SpaceMap); ++j) {
-            uint64_t targetBlock = i * (blockSize / sizeof (SpaceMap)) + j;
-            if(targetBlock >= blockCount) {
-                spacemap[j].blockType = BLK_BAD;
-                spacemap[j].itemsLeft = BLK_BAD;
-            } else if(targetBlock >= super->ptrSpaceMap && targetBlock < super->ptrSpaceMap + super->blkSpaceMap) {
-                spacemap[j].blockType = BLK_SPECIAL;
-                spacemap[j].itemsLeft = BLK_SPECIAL;
-            } else if(targetBlock >= super->ptrJournal) {
-                spacemap[j].blockType = BLK_JOURNAL;
-                spacemap[j].itemsLeft = BLK_JOURNAL;
-            } else if(targetBlock == ptrRootInodeBlock) {
-                spacemap[j].blockType = BLK_INODE;
-                spacemap[j].itemsLeft = (uint8_t) std::min<uint64_t>(blockSize / sizeof (Inode) - 1, 255);
-            } else if(targetBlock == ptrRootDirBlock) {
-                spacemap[j].blockType = BLK_DIR;
-                spacemap[j].itemsLeft = (uint8_t) std::min<uint64_t>(blockSize / sizeof (DirItem) - 2, 255);
-            } else if((targetBlock % 256) == 0) {
-                spacemap[j].blockType = BLK_SUPER;
-                spacemap[j].itemsLeft = BLK_SUPER;
-            } else {
-                spacemap[j].blockType = BLK_UNUSED;
-                spacemap[j].itemsLeft = BLK_UNUSED;
-            }
-        }
-        if(fwriteat(devFile, spacemap, i * blockSize, blockSize) <= 0) {
-            std::perror("Write error");
-            return 1;
-        }
-    }
-    delete[] spacemap;
-
-    std::puts("Writing root inode...");
-    Inode *inode = (Inode *) new char[blockSize];
-    std::memset(inode, 0, blockSize);
-    inode[0].mode = 0040755;
-    inode[0].nlink = 2;
-    inode[0].size = blockSize;
-    inode[0].ptrDirect[0] = ptrRootDirBlock * (blockSize / sizeof (DirItem));
-    if(fwriteat(devFile, inode, ptrRootInodeBlock * blockSize, blockSize) <= 0) {
-        std::perror("Write error");
+    const char *fakeArgv[] = { "", "-d" };
+    fuse_args args = FUSE_ARGS_INIT(2, (char **) fakeArgv);
+    fuse_chan *ch = fuse_mount(mountpoint.c_str(), &args);
+    if(!ch) {
+        std::fprintf(stderr, "Failed to mount filesystem.\n");
         return 1;
     }
-    delete[] inode;
-
-    std::puts("Writing root directory...");
-    DirItem *dir = (DirItem *) new char[blockSize];
-    std::memset(dir, 0, blockSize);
-    dir[0].magic = DirItemMagic;
-    dir[0].filename[0] = '.';
-    dir[0].inode = super->ptrRootInode;
-    dir[0].nextChunk = 0;
-    dir[1].magic = DirItemMagic;
-    dir[1].filename[0] = '.';
-    dir[1].filename[1] = '.';
-    dir[1].inode = dir[0].inode;
-    dir[1].nextChunk = 0;
-    if(fwriteat(devFile, dir, ptrRootDirBlock * blockSize, blockSize) <= 0) {
-        std::perror("Write error");
+    fuse_session *se = fuse_lowlevel_new(&args, &dogefs_oper, sizeof dogefs_oper, nullptr);
+    if(!se) {
+        std::fprintf(stderr, "Failed to create FUSE session.\n");
         return 1;
     }
-    delete[] dir;
+    fuse_set_signal_handlers(se);
+    fuse_session_add_chan(se, ch);
+    fuse_daemonize(true);
+    fuse_session_loop(se);
+    fuse_session_remove_chan(ch);
+    fuse_remove_signal_handlers(se);
+    fuse_session_destroy(se);
+    fuse_unmount(mountpoint.c_str(), ch);
 
-    std::printf("Writeing %" PRIu64 " journal blocks...\n", super->blkJournal);
-    JournalItem *journal = (JournalItem *) new char[blockSize];
-    std::memset(journal, 0, blockSize);
-    for(uint64_t i = super->ptrJournal; i < super->ptrJournal + super->blkJournal; ++i) {
-        if(fwriteat(devFile, journal, i * blockSize, blockSize) <= 0) {
-            std::perror("Write error");
-            return 1;
-        }
-    }
-    delete[] journal;
-    delete[] super;
-
-    std::printf("Flushing cache... ");
-    fsync(fileno(devFile));
-    std::fclose(devFile);
-
-    std::puts("Done!");
+    delete g_super;
+    fsync(fileno(g_devFile));
+    std::fclose(g_devFile);
     return 0;
 }

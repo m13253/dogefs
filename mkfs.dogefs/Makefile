@@ -1,5 +1,6 @@
 .PHONY: all clean
 
+CXX = clang++
 CXXFLAGS = -g -std=gnu++11 -Wall -D_FILE_OFFSET_BITS=64
 
 all: mkfs.dogefs
