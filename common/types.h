@@ -10,6 +10,7 @@ constexpr uint64_t JournalItemMagic = 2322287779482569229;
 
 enum BlockType {
     BLK_BAD     = 0x00,
+    BLK_INDEX   = 0x11,
     BLK_INODE   = 0x22,
     BLK_SUPER   = 0x33,
     BLK_DIR     = 0x44,

@@ -9,6 +9,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include "../common/types.h"
+#include "../common/spacemap.h"
 
 using namespace DogeFS;
 
@@ -142,6 +143,9 @@ end:
     delete[] dir;
 }
 
+static void dogefs_mkdir(fuse_req_t req, fuse_ino_t parent, const char *name, mode_t mode) {
+}
+
 static void dogefs_open(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi) {
     std::printf("open(..., %" PRIu64 ", ...)\n", ino);
     fuse_reply_open(req, fi);
@@ -158,6 +162,7 @@ static fuse_lowlevel_ops dogefs_oper = {
     .readdir = dogefs_readdir,
     .open    = dogefs_open,
     .read    = dogefs_read,
+    .mkdir   = dogefs_mkdir,
 };
 
 int main(int argc, char *argv[]) {
