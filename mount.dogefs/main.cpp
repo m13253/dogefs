@@ -17,7 +17,7 @@ std::FILE *g_devFile = nullptr;
 SuperBlock *g_super = nullptr;
 
 static int dogefs_stat(uint64_t ino, struct stat *statbuf) {
-    std::printf("stat(%" PRIu64 ", ...)\n", ino);
+    std::printf("stat(%" PRIu64 ", ...);\n", ino);
     uint64_t realInode = ino == 1 ? g_super->ptrRootInode : ino;
     Inode inode;
     if(freadat(g_devFile, &inode, realInode * sizeof (Inode), sizeof (Inode)) <= 0) {
@@ -40,7 +40,7 @@ static int dogefs_stat(uint64_t ino, struct stat *statbuf) {
 }
 
 static void dogefs_lookup(fuse_req_t req, fuse_ino_t parent, const char *name) {
-    std::printf("lookup(..., %" PRIu64 ", \"%s\")\n", parent, name);
+    std::printf("lookup(..., %" PRIu64 ", \"%s\");\n", parent, name);
     if(parent == 1) {
         parent = g_super->ptrRootInode;
     }
@@ -85,7 +85,7 @@ end:
 }
 
 static void dogefs_getattr(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *) {
-    std::printf("getattr(..., %" PRIu64 ", ...)\n", ino);
+    std::printf("getattr(..., %" PRIu64 ", ...);\n", ino);
     struct stat stbuf;
     if(dogefs_stat(ino, &stbuf) < 0) {
         fuse_reply_err(req, EIO);
@@ -95,7 +95,7 @@ static void dogefs_getattr(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info
 }
 
 static void dogefs_setattr(fuse_req_t req, fuse_ino_t ino, struct stat *attr, int to_set, struct fuse_file_info *) {
-    std::printf("setattr(..., %" PRIu64 ", %p, %#04x, ...)\n", ino, attr, to_set);
+    std::printf("setattr(..., %" PRIu64 ", %p, %#04x, ...);\n", ino, attr, to_set);
     uint64_t realInode = ino == 1 ? g_super->ptrRootInode : ino;
     Inode inode;
     if(freadat(g_devFile, &inode, realInode * sizeof (Inode), sizeof (Inode)) <= 0) {
@@ -114,7 +114,7 @@ static void dogefs_setattr(fuse_req_t req, fuse_ino_t ino, struct stat *attr, in
         inode.mode &= ~02000;
     }
     if(to_set & FUSE_SET_ATTR_SIZE) {
-        inode.size = std::min<uint64_t>(attr->st_size, g_super->blockSize * g_super->blockSize / sizeof (uint64_t));
+        inode.size = std::min<uint64_t>(attr->st_size, 4 * g_super->blockSize);
     }
     if(to_set & FUSE_SET_ATTR_ATIME) {
     }
@@ -128,10 +128,16 @@ static void dogefs_setattr(fuse_req_t req, fuse_ino_t ino, struct stat *attr, in
         std::perror("Write error");
         fuse_reply_err(req, EIO);
     }
+    struct stat stbuf;
+    if(dogefs_stat(ino, &stbuf) < 0) {
+        fuse_reply_err(req, EIO);
+    } else {
+        fuse_reply_attr(req, &stbuf, 1.0);
+    }
 }
 
 static void dogefs_readdir(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off, struct fuse_file_info *) {
-    std::printf("readdir(..., %" PRIu64 ", %" PRIu64 ", %" PRIu64 ")\n", ino, size, off);
+    std::printf("readdir(..., %" PRIu64 ", %" PRIu64 ", %" PRIu64 ");\n", ino, size, off);
     if(ino == 1) {
         ino = g_super->ptrRootInode;
     }
@@ -169,7 +175,6 @@ static void dogefs_readdir(fuse_req_t req, fuse_ino_t ino, size_t size, off_t of
         result.append(buf, entrySize);
         delete[] buf;
     }
-    std::puts("");
     if(off >= result.length()) {
         fuse_reply_buf(req, nullptr, 0);
     } else {
@@ -180,7 +185,7 @@ end:
 }
 
 static void dogefs_mkdir(fuse_req_t req, fuse_ino_t parent, const char *name, mode_t mode) {
-    std::printf("mkdir(..., %" PRIu64 ", \"%s\", %" PRIu32 ")\n", parent, name, mode);
+    std::printf("mkdir(..., %" PRIu64 ", \"%s\", %" PRIu32 ");\n", parent, name, mode);
     if(parent == 1) {
         parent = g_super->ptrRootInode;
     }
@@ -202,12 +207,14 @@ static void dogefs_mkdir(fuse_req_t req, fuse_ino_t parent, const char *name, mo
         fuse_reply_err(req, ENOSPC);
         return;
     }
+    std::printf("\tAllocate inode #%" PRIu64"\n", ptrSubdirInode);
     uint64_t ptrSubdirBlock = allocateBlock(g_devFile, g_super, BLK_DIR);
     if(ptrSubdirBlock == 0) {
         std::fprintf(stderr, "Cannot allocate directory\n");
         fuse_reply_err(req, ENOSPC);
         return;
     }
+    std::printf("\tAllocate directory %#" PRIx64"\n", ptrSubdirBlock);
 
     DirItem *subdir = (DirItem *) new char[g_super->blockSize];
     std::memset(subdir, 0, g_super->blockSize);
@@ -248,12 +255,13 @@ static void dogefs_mkdir(fuse_req_t req, fuse_ino_t parent, const char *name, mo
     }
 
     uint64_t ptrDirItem = allocateDirItem(g_devFile, g_super, ptrDirBlock);
-    DirItem dirItem;
     if(ptrDirItem == 0) {
-        std::fprintf(stderr, "Cannot allocate directory item from block %" PRIu64 "\n", ptrDirBlock);
+        std::fprintf(stderr, "Cannot allocate directory item from block %#" PRIx64 "\n", ptrDirBlock);
         fuse_reply_err(req, ENOSPC);
         return;
     }
+    std::printf("\tAllocate directory item at %#" PRIx64"\n", ptrDirItem);
+    DirItem dirItem;
     dirItem.magic = DirItemMagic;
     std::strncpy(dirItem.filename, name, 32);
     dirItem.inode = ptrSubdirInode;
@@ -277,7 +285,7 @@ static void dogefs_mkdir(fuse_req_t req, fuse_ino_t parent, const char *name, mo
 }
 
 static void dogefs_unlink(fuse_req_t req, fuse_ino_t parent, const char *name) {
-    std::printf("unlink(..., %" PRIu64 ", \"%s\")\n", parent, name);
+    std::printf("unlink(..., %" PRIu64 ", \"%s\");\n", parent, name);
     if(parent == 1) {
         parent = g_super->ptrRootInode;
     }
@@ -333,12 +341,12 @@ end:
 }
 
 static void dogefs_open(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi) {
-    std::printf("open(..., %" PRIu64 ", ...)\n", ino);
+    std::printf("open(..., %" PRIu64 ", ...);\n", ino);
     fuse_reply_open(req, fi);
 }
 
 static void dogefs_read(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off, struct fuse_file_info *) {
-    std::printf("read(..., %" PRIu64 ", %" PRIu64 ", %" PRIu64 ", ...)\n", ino, size, off);
+    std::printf("read(..., %" PRIu64 ", %" PRIu64 ", %" PRIu64 ", ...);\n", ino, size, off);
     if(ino == 1) {
         ino = g_super->ptrRootInode;
     }
@@ -349,21 +357,23 @@ static void dogefs_read(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off, 
         return;
     }
     if(off >= inode.size) {
-        size = off = 0;
-    } else if(off + size >= inode.size) {
+        fuse_reply_buf(req, nullptr, 0);
+    } else if(off + size > inode.size) {
         size = inode.size - off;
     }
     if(inode.size <= 64) {
-        fuse_reply_buf(req, inode.contents + off, inode.size - off);
+        fuse_reply_buf(req, inode.contents + off, size);
     } else {
         uint64_t beginBlock = off / g_super->blockSize;
-        uint64_t endBlock = std::min<uint64_t>(ceilDiv(off + size, g_super->blockSize), 3);
+        uint64_t endBlock = std::min<uint64_t>(ceilDiv(off + size, g_super->blockSize), 4);
+        std::printf("\tRead task starts: block [%" PRIu64 " .. %" PRIu64 "]\n", beginBlock, endBlock);
         char *buf = new char[size];
         uint64_t bytesRead = 0;
-        for(uint64_t i = beginBlock; i <= endBlock; ++i) {
+        for(uint64_t i = beginBlock; i < endBlock; ++i) {
             uint64_t beginByte = std::max<uint64_t>(off, i * g_super->blockSize);
             uint64_t endByte = std::min<uint64_t>(off + size, (i + 1) * g_super->blockSize);
             if(inode.ptrDirect[i] != 0) {
+                std::printf("\tRead data block [%#" PRIx64" .. %#" PRIx64 "], %" PRIu64 " bytes\n", beginByte, endByte, endByte - beginByte);
                 if(freadat(g_devFile, buf + bytesRead, inode.ptrDirect[i] * g_super->blockSize + beginByte - i * g_super->blockSize, endByte - beginByte) <= 0) {
                     std::perror("Read error");
                     delete[] buf;
@@ -371,16 +381,17 @@ static void dogefs_read(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off, 
                     return;
                 }
             } else {
+                std::printf("\tZero data block [%#" PRIx64" .. %#" PRIx64 "], %" PRIu64 " bytes\n", beginByte, endByte, endByte - beginByte);
                 std::memset(buf + bytesRead, 0, endByte - beginByte);
             }
             bytesRead += endByte - beginByte;
         }
-        fuse_reply_buf(req, inode.contents + off, inode.size - off);
+        fuse_reply_buf(req, buf, size);
     }
 }
 
 static void dogefs_write(fuse_req_t req, fuse_ino_t ino, const char *buf, size_t size, off_t off, struct fuse_file_info *) {
-    std::printf("write(..., %" PRIu64 ", ..., %" PRIu64 ", %" PRIu64 ", ...)\n", ino, size, off);
+    std::printf("write(..., %" PRIu64 ", %p, %" PRIu64 ", %" PRIu64 ", ...);\n", ino, buf, size, off);
     if(ino == 1) {
         ino = g_super->ptrRootInode;
     }
@@ -391,8 +402,13 @@ static void dogefs_write(fuse_req_t req, fuse_ino_t ino, const char *buf, size_t
         return;
     }
     uint64_t oldSize = inode.size;
+    if(off >= 4 * g_super->blockSize) {
+        fuse_reply_err(req, ENOSPC);
+        return;
+    }
     if(off + size > inode.size) {
-        inode.size = off + size;
+        inode.size = std::min<uint64_t>(off + size, 4 * g_super->blockSize);
+        size = inode.size - off;
     }
     if(oldSize <= 64 && inode.size > 64) {
         uint64_t ptrDataBlock = allocateBlock(g_devFile, g_super, BLK_FILE);
@@ -411,11 +427,12 @@ static void dogefs_write(fuse_req_t req, fuse_ino_t ino, const char *buf, size_t
         std::memcpy(inode.contents + off, buf, size);
     } else {
         uint64_t beginBlock = off / g_super->blockSize;
-        uint64_t endBlock = std::min<uint64_t>(ceilDiv(off + size, g_super->blockSize), 3);
+        uint64_t endBlock = std::min<uint64_t>(ceilDiv(off + size, g_super->blockSize), 4);
+        std::printf("\tWrite task starts: Block [%" PRIu64 " .. %" PRIu64 "]\n", beginBlock, endBlock);
         uint64_t bytesWritten = 0;
         char *zeros = new char[g_super->blockSize];
         std::memset(zeros, 0, g_super->blockSize);
-        for(uint64_t i = beginBlock; i <= endBlock; ++i) {
+        for(uint64_t i = beginBlock; i < endBlock; ++i) {
             if(inode.ptrDirect[i] == 0) {
                 uint64_t ptrDataBlock = allocateBlock(g_devFile, g_super, BLK_FILE);
                 if(ptrDataBlock == 0) {
@@ -423,6 +440,7 @@ static void dogefs_write(fuse_req_t req, fuse_ino_t ino, const char *buf, size_t
                     delete[] zeros;
                     return;
                 }
+                std::printf("\tAllocate data block [%" PRIu64 "] at %#" PRIx64"\n", i, ptrDataBlock);
                 if(fwriteat(g_devFile, zeros, ptrDataBlock * g_super->blockSize, g_super->blockSize) <= 0) {
                     std::perror("Write error");
                     fuse_reply_err(req, EIO);
@@ -433,6 +451,7 @@ static void dogefs_write(fuse_req_t req, fuse_ino_t ino, const char *buf, size_t
             }
             uint64_t beginByte = std::max<uint64_t>(off, i * g_super->blockSize);
             uint64_t endByte = std::min<uint64_t>(off + size, (i + 1) * g_super->blockSize);
+            std::printf("\tWriting data block [%#" PRIx64" .. %#" PRIx64 "], %" PRIu64 " bytes\n", beginByte, endByte, endByte - beginByte);
             if(fwriteat(g_devFile, buf + bytesWritten, inode.ptrDirect[i] * g_super->blockSize + beginByte - i * g_super->blockSize, endByte - beginByte) <= 0) {
                 std::perror("Write error");
                 fuse_reply_err(req, EIO);
@@ -442,7 +461,6 @@ static void dogefs_write(fuse_req_t req, fuse_ino_t ino, const char *buf, size_t
             bytesWritten += endByte - beginByte;
         }
         delete[] zeros;
-        fuse_reply_buf(req, inode.contents + off, inode.size - off);
     }
     if(fwriteat(g_devFile, &inode, ino * sizeof (Inode), sizeof (Inode)) <= 0) {
         std::perror("Write error");
@@ -453,7 +471,7 @@ static void dogefs_write(fuse_req_t req, fuse_ino_t ino, const char *buf, size_t
 }
 
 static void dogefs_create(fuse_req_t req, fuse_ino_t parent, const char *name, mode_t mode, struct fuse_file_info *fi) {
-    std::printf("create(..., %" PRIu64 ", \"%s\", %" PRIu32 ", ...)\n", parent, name, mode);
+    std::printf("create(..., %" PRIu64 ", \"%s\", %" PRIu32 ", ...);\n", parent, name, mode);
     if(parent == 1) {
         parent = g_super->ptrRootInode;
     }
@@ -475,6 +493,7 @@ static void dogefs_create(fuse_req_t req, fuse_ino_t parent, const char *name, m
         fuse_reply_err(req, ENOSPC);
         return;
     }
+    std::printf("\tAllocate inode #%" PRIu64"\n", ptrFileInode);
     Inode fileInode;
     std::memset(&fileInode, 0, sizeof (Inode));
     fileInode.mode = 0100000 | (mode & 0007777);
@@ -494,12 +513,13 @@ static void dogefs_create(fuse_req_t req, fuse_ino_t parent, const char *name, m
     }
 
     uint64_t ptrDirItem = allocateDirItem(g_devFile, g_super, ptrDirBlock);
-    DirItem dirItem;
     if(ptrDirItem == 0) {
-        std::fprintf(stderr, "Cannot allocate directory item from block %" PRIu64 "\n", ptrDirBlock);
+        std::fprintf(stderr, "Cannot allocate directory item from block %#" PRIx64 "\n", ptrDirBlock);
         fuse_reply_err(req, ENOSPC);
         return;
     }
+    std::printf("\tAllocate directory item at %#" PRIx64"\n", ptrDirItem);
+    DirItem dirItem;
     dirItem.magic = DirItemMagic;
     std::strncpy(dirItem.filename, name, 32);
     dirItem.inode = ptrFileInode;
@@ -553,10 +573,12 @@ int main(int argc, char *argv[]) {
         std::perror("Read error");
         return 1;
     }
+    std::puts("Checking DogeFS filesystem... OK!");
     if(g_super->magic != SuperBlockMagic) {
         std::fprintf(stderr, "Not a DogeFS filesystem.\n");
         return 1;
     }
+    std::printf("Device size: %.1lf MiB (%" PRIu64 " blocks)\n\n", g_super->blockCount * (g_super->blockSize / 1048576.), g_super->blockCount);
 
     const char *fakeArgv[] = { "" };
     fuse_args args = FUSE_ARGS_INIT(1, (char **) fakeArgv);

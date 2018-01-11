@@ -12,6 +12,9 @@ static inline T ceilDiv(const T a, const T b) {
 }
 
 static inline int fwriteat(std::FILE *f, const void *ptr, off_t pos, size_t size) {
+    if(size == 0) {
+        return 1;
+    }
     if(fseeko(f, pos, SEEK_SET) != 0) {
         return 0;
     }
@@ -19,6 +22,9 @@ static inline int fwriteat(std::FILE *f, const void *ptr, off_t pos, size_t size
 }
 
 static inline int freadat(std::FILE *f, void *ptr, off_t pos, size_t size) {
+    if(size == 0) {
+        return 1;
+    }
     if(fseeko(f, pos, SEEK_SET) != 0) {
         return 0;
     }
