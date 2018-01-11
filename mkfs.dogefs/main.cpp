@@ -42,7 +42,7 @@ int main(int argc, char *argv[]) {
     super->magic = SuperBlockMagic;
     super->version[0] = 1;
     super->version[1] = 0;
-    super->inUseCount = 0;
+    super->dirtyLevel = 0;
     super->blockSize = blockSize;
     super->blockCount = blockCount;
     super->ptrSpaceMap = 1;
@@ -106,6 +106,9 @@ int main(int argc, char *argv[]) {
     inode[0].mode = 0040755;
     inode[0].nlink = 2;
     inode[0].size = blockSize;
+    updateTimestamp(inode[0].secCreate, inode[0].nsecCreate);
+    updateTimestamp(inode[0].secModify, inode[0].nsecModify);
+    updateTimestamp(inode[0].secChange, inode[0].nsecChange);
     inode[0].ptrDirect[0] = ptrRootDirBlock;
     if(fwriteat(devFile, inode, ptrRootInodeBlock * blockSize, blockSize) <= 0) {
         std::perror("Write error");

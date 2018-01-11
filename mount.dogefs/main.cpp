@@ -30,6 +30,12 @@ static int dogefs_stat(uint64_t ino, struct stat *statbuf) {
     statbuf->st_nlink = inode.nlink;
     statbuf->st_uid = inode.uid;
     statbuf->st_gid = inode.gid;
+    statbuf->st_atim.tv_sec = inode.secModify;
+    statbuf->st_atim.tv_nsec = inode.nsecModify;
+    statbuf->st_mtim.tv_sec = inode.secModify;
+    statbuf->st_mtim.tv_nsec = inode.nsecModify;
+    statbuf->st_ctim.tv_sec = inode.secChange;
+    statbuf->st_ctim.tv_nsec = inode.nsecChange;
     if((inode.mode & 0170000) == 0060000 || (inode.mode & 0170000) == 0020000) {
         statbuf->st_rdev = inode.devMajor * 0x100000000 | inode.devMinor;
     } else {
@@ -98,6 +104,7 @@ static void dogefs_setattr(fuse_req_t req, fuse_ino_t ino, struct stat *attr, in
     std::printf("setattr(..., %" PRIu64 ", %p, %#04x, ...);\n", ino, attr, to_set);
     uint64_t realInode = ino == 1 ? g_super->ptrRootInode : ino;
     Inode inode;
+    updateTimestamp(inode.secChange, inode.nsecChange);
     if(freadat(g_devFile, &inode, realInode * sizeof (Inode), sizeof (Inode)) <= 0) {
         std::perror("Read error");
         fuse_reply_err(req, EIO);
@@ -116,13 +123,12 @@ static void dogefs_setattr(fuse_req_t req, fuse_ino_t ino, struct stat *attr, in
     if(to_set & FUSE_SET_ATTR_SIZE) {
         inode.size = attr->st_size;
     }
-    if(to_set & FUSE_SET_ATTR_ATIME) {
-    }
     if(to_set & FUSE_SET_ATTR_MTIME) {
-    }
-    if(to_set & FUSE_SET_ATTR_ATIME_NOW) {
+        inode.secModify = attr->st_atim.tv_sec;
+        inode.nsecModify = attr->st_atim.tv_nsec;
     }
     if(to_set & FUSE_SET_ATTR_MTIME_NOW) {
+        updateTimestamp(inode.secModify, inode.nsecModify);
     }
     if(fwriteat(g_devFile, &inode, realInode * sizeof (Inode), sizeof (Inode)) <= 0) {
         std::perror("Write error");
@@ -199,6 +205,7 @@ static void dogefs_mkdir(fuse_req_t req, fuse_ino_t parent, const char *name, mo
         fuse_reply_err(req, ENOTDIR);
         return;
     }
+    updateTimestamp(inode.secModify, inode.nsecModify);
     uint64_t ptrDirBlock = inode.ptrDirect[0];
 
     uint64_t ptrSubdirInode = allocateInode(g_devFile, g_super);
@@ -233,6 +240,9 @@ static void dogefs_mkdir(fuse_req_t req, fuse_ino_t parent, const char *name, mo
     subdirInode.mode = 0040000 | (mode & 0007777);
     subdirInode.nlink = 2;
     subdirInode.size = g_super->blockSize;
+    updateTimestamp(subdirInode.secCreate, subdirInode.nsecCreate);
+    updateTimestamp(subdirInode.secModify, subdirInode.nsecModify);
+    updateTimestamp(subdirInode.secChange, subdirInode.nsecChange);
     subdirInode.ptrDirect[0] = ptrSubdirBlock;
 
     if(fwriteat(g_devFile, subdir, ptrSubdirBlock * g_super->blockSize, g_super->blockSize) <= 0) {
@@ -299,6 +309,7 @@ static void dogefs_unlink(fuse_req_t req, fuse_ino_t parent, const char *name) {
         fuse_reply_err(req, ENOTDIR);
         return;
     }
+    updateTimestamp(inode.secModify, inode.nsecModify);
     uint64_t dirBlock = inode.ptrDirect[0];
     DirItem *dir = (DirItem *) new char[g_super->blockSize];
     if(freadat(g_devFile, dir, dirBlock * g_super->blockSize, g_super->blockSize) <= 0) {
@@ -402,6 +413,7 @@ static void dogefs_write(fuse_req_t req, fuse_ino_t ino, const char *buf, size_t
         fuse_reply_err(req, EIO);
         return;
     }
+    updateTimestamp(inode.secModify, inode.nsecModify);
     uint64_t oldSize = inode.size;
     if(off + size > inode.size) {
         inode.size = off + size;
@@ -467,6 +479,7 @@ static void dogefs_create(fuse_req_t req, fuse_ino_t parent, const char *name, m
         fuse_reply_err(req, ENOTDIR);
         return;
     }
+    updateTimestamp(inode.secModify, inode.nsecModify);
     uint64_t ptrDirBlock = inode.ptrDirect[0];
 
     uint64_t ptrFileInode = allocateInode(g_devFile, g_super);
@@ -481,6 +494,9 @@ static void dogefs_create(fuse_req_t req, fuse_ino_t parent, const char *name, m
     fileInode.mode = 0100000 | (mode & 0007777);
     fileInode.nlink = 1;
     fileInode.size = 0;
+    updateTimestamp(fileInode.secCreate, fileInode.nsecCreate);
+    updateTimestamp(fileInode.secModify, fileInode.nsecModify);
+    updateTimestamp(fileInode.secChange, fileInode.nsecChange);
 
     if(fwriteat(g_devFile, &fileInode, ptrFileInode * sizeof (Inode), sizeof (Inode)) <= 0) {
         std::perror("Write error");

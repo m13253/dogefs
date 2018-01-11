@@ -28,7 +28,7 @@ struct SuperBlock {
     // 24
     uint16_t version[2];
     // 28
-    uint32_t inUseCount;
+    uint32_t dirtyLevel;
     // 32
     uint64_t blockSize;
     // 40
@@ -75,14 +75,14 @@ struct Inode {
         };
     };
     // 28
-    int64_t dateAccess;
-    uint32_t nsecAccess;
+    int64_t secCreate;
+    int32_t nsecCreate;
     // 40
-    int64_t dateModify;
-    uint32_t nsecModify;
+    int64_t secModify;
+    int32_t nsecModify;
     // 52
-    int64_t dateCreate;
-    uint32_t nsecCreate;
+    int64_t secChange;
+    int32_t nsecChange;
     // 64
     union {
         char contents[64];

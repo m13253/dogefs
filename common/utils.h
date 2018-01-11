@@ -2,6 +2,7 @@
 #include <alloca.h>
 #include <cstdio>
 #include <cstdlib>
+#include <time.h>
 
 #define DOGEFS_PACKED __attribute__((packed))
 
@@ -42,6 +43,13 @@ static inline int freadat(std::FILE *f, void *ptr, off_t pos, size_t size) {
         return 0;
     }
     return std::fread(ptr, size, 1, f) * size;
+}
+
+static inline void updateTimestamp(int64_t &sec, int32_t &nsec) {
+    struct timespec ts = { 0, 0 };
+    clock_gettime(CLOCK_REALTIME, &ts);
+    sec = ts.tv_sec;
+    nsec = ts.tv_nsec;
 }
 
 }
