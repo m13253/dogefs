@@ -1,4 +1,5 @@
 #pragma once
+#include <alloca.h>
 #include <cstdio>
 #include <cstdlib>
 
@@ -19,6 +20,18 @@ static inline int fwriteat(std::FILE *f, const void *ptr, off_t pos, size_t size
         return 0;
     }
     return std::fwrite(ptr, size, 1, f) * size;
+}
+
+static inline int fzeroat(std::FILE *f, off_t pos, size_t size) {
+    if(size == 0) {
+        return 1;
+    }
+    if(fseeko(f, pos, SEEK_SET) != 0) {
+        return 0;
+    }
+    char *zero = (char *) alloca(size);
+    std::memset(zero, 0, size);
+    return std::fwrite(zero, size, 1, f) * size;
 }
 
 static inline int freadat(std::FILE *f, void *ptr, off_t pos, size_t size) {

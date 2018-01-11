@@ -114,7 +114,7 @@ static void dogefs_setattr(fuse_req_t req, fuse_ino_t ino, struct stat *attr, in
         inode.mode &= ~02000;
     }
     if(to_set & FUSE_SET_ATTR_SIZE) {
-        inode.size = std::min<uint64_t>(attr->st_size, 4 * g_super->blockSize);
+        inode.size = attr->st_size;
     }
     if(to_set & FUSE_SET_ATTR_ATIME) {
     }
@@ -358,23 +358,24 @@ static void dogefs_read(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off, 
     }
     if(off >= inode.size) {
         fuse_reply_buf(req, nullptr, 0);
-    } else if(off + size > inode.size) {
+    } else if(off + size >= inode.size) {
         size = inode.size - off;
     }
     if(inode.size <= 64) {
         fuse_reply_buf(req, inode.contents + off, size);
     } else {
         uint64_t beginBlock = off / g_super->blockSize;
-        uint64_t endBlock = std::min<uint64_t>(ceilDiv(off + size, g_super->blockSize), 4);
+        uint64_t endBlock = ceilDiv(off + size, g_super->blockSize);
         std::printf("\tRead task starts: block [%" PRIu64 " .. %" PRIu64 "]\n", beginBlock, endBlock);
         char *buf = new char[size];
         uint64_t bytesRead = 0;
         for(uint64_t i = beginBlock; i < endBlock; ++i) {
             uint64_t beginByte = std::max<uint64_t>(off, i * g_super->blockSize);
             uint64_t endByte = std::min<uint64_t>(off + size, (i + 1) * g_super->blockSize);
-            if(inode.ptrDirect[i] != 0) {
+            uint64_t index = getIndexForRead(g_devFile, g_super, &inode, i);
+            if(index != 0) {
                 std::printf("\tRead data block [%#" PRIx64" .. %#" PRIx64 "], %" PRIu64 " bytes\n", beginByte, endByte, endByte - beginByte);
-                if(freadat(g_devFile, buf + bytesRead, inode.ptrDirect[i] * g_super->blockSize + beginByte - i * g_super->blockSize, endByte - beginByte) <= 0) {
+                if(freadat(g_devFile, buf + bytesRead, index * g_super->blockSize + beginByte - i * g_super->blockSize, endByte - beginByte) <= 0) {
                     std::perror("Read error");
                     delete[] buf;
                     fuse_reply_err(req, EIO);
@@ -402,12 +403,8 @@ static void dogefs_write(fuse_req_t req, fuse_ino_t ino, const char *buf, size_t
         return;
     }
     uint64_t oldSize = inode.size;
-    if(off >= 4 * g_super->blockSize) {
-        fuse_reply_err(req, ENOSPC);
-        return;
-    }
     if(off + size > inode.size) {
-        inode.size = std::min<uint64_t>(off + size, 4 * g_super->blockSize);
+        inode.size = off + size;
         size = inode.size - off;
     }
     if(oldSize <= 64 && inode.size > 64) {
@@ -427,40 +424,25 @@ static void dogefs_write(fuse_req_t req, fuse_ino_t ino, const char *buf, size_t
         std::memcpy(inode.contents + off, buf, size);
     } else {
         uint64_t beginBlock = off / g_super->blockSize;
-        uint64_t endBlock = std::min<uint64_t>(ceilDiv(off + size, g_super->blockSize), 4);
+        uint64_t endBlock = ceilDiv(off + size, g_super->blockSize);
         std::printf("\tWrite task starts: Block [%" PRIu64 " .. %" PRIu64 "]\n", beginBlock, endBlock);
         uint64_t bytesWritten = 0;
-        char *zeros = new char[g_super->blockSize];
-        std::memset(zeros, 0, g_super->blockSize);
         for(uint64_t i = beginBlock; i < endBlock; ++i) {
-            if(inode.ptrDirect[i] == 0) {
-                uint64_t ptrDataBlock = allocateBlock(g_devFile, g_super, BLK_FILE);
-                if(ptrDataBlock == 0) {
-                    fuse_reply_err(req, ENOSPC);
-                    delete[] zeros;
-                    return;
-                }
-                std::printf("\tAllocate data block [%" PRIu64 "] at %#" PRIx64"\n", i, ptrDataBlock);
-                if(fwriteat(g_devFile, zeros, ptrDataBlock * g_super->blockSize, g_super->blockSize) <= 0) {
-                    std::perror("Write error");
-                    fuse_reply_err(req, EIO);
-                    delete[] zeros;
-                    return;
-                }
-                inode.ptrDirect[i] = ptrDataBlock;
+            uint64_t index = getIndexForWrite(g_devFile, g_super, &inode, i);
+            if(index == 0) {
+                fuse_reply_err(req, ENOSPC);
+                return;
             }
             uint64_t beginByte = std::max<uint64_t>(off, i * g_super->blockSize);
             uint64_t endByte = std::min<uint64_t>(off + size, (i + 1) * g_super->blockSize);
             std::printf("\tWriting data block [%#" PRIx64" .. %#" PRIx64 "], %" PRIu64 " bytes\n", beginByte, endByte, endByte - beginByte);
-            if(fwriteat(g_devFile, buf + bytesWritten, inode.ptrDirect[i] * g_super->blockSize + beginByte - i * g_super->blockSize, endByte - beginByte) <= 0) {
+            if(fwriteat(g_devFile, buf + bytesWritten, index * g_super->blockSize + beginByte - i * g_super->blockSize, endByte - beginByte) <= 0) {
                 std::perror("Write error");
                 fuse_reply_err(req, EIO);
-                delete[] zeros;
                 return;
             }
             bytesWritten += endByte - beginByte;
         }
-        delete[] zeros;
     }
     if(fwriteat(g_devFile, &inode, ino * sizeof (Inode), sizeof (Inode)) <= 0) {
         std::perror("Write error");

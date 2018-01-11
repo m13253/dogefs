@@ -88,4 +88,87 @@ static inline uint64_t allocateDirItem(std::FILE *devFile, SuperBlock *super, ui
     return 0;
 }
 
+static inline uint64_t getIndexForRead(std::FILE *devFile, SuperBlock *super, Inode *inode, uint64_t block) {
+    if(block < 4) {
+        return inode->ptrDirect[block];
+    } else if(block < 4 + super->blockSize / sizeof (uint64_t)) {
+        if(inode->ptrIndirect1 == 0) {
+            return 0;
+        }
+        uint64_t *index = (uint64_t *) new char[super->blockSize];
+        if(freadat(devFile, index, inode->ptrIndirect1 * super->blockSize, super->blockSize) <= 0) {
+            std::perror("Read error");
+            delete[] index;
+            return 0;
+        }
+        uint64_t result = index[block - 4];
+        delete[] index;
+        return result;
+    } else {
+        return 0;
+    }
+}
+
+static inline uint64_t getIndexForWrite(std::FILE *devFile, SuperBlock *super, Inode *inode, uint64_t block) {
+    if(block < 4) {
+        if(inode->ptrDirect[block] == 0) {
+            uint64_t ptrDataBlock = allocateBlock(devFile, super, BLK_FILE);
+            if(ptrDataBlock == 0) {
+                std::printf("\tFailed to allocate data block [%" PRIu64 "]\n", block);
+                return 0;
+            }
+            std::printf("\tAllocate data block [%" PRIu64 "] at %#" PRIx64"\n", block, ptrDataBlock);
+            if(fzeroat(devFile, ptrDataBlock * super->blockSize, super->blockSize) <= 0) {
+                std::perror("Write error");
+                return 0;
+            }
+            inode->ptrDirect[block] = ptrDataBlock;
+        }
+        return inode->ptrDirect[block];
+    } else if(block < 4 + super->blockSize / sizeof (uint64_t)) {
+        if(inode->ptrIndirect1 == 0) {
+            uint64_t ptrIndexBlock = allocateBlock(devFile, super, BLK_INDEX);
+            if(ptrIndexBlock == 0) {
+                std::printf("\tFailed to allocate index block [%" PRIu64 "]\n", block);
+                return 0;
+            }
+            std::printf("\tAllocate index block [1] at %#" PRIx64"\n", ptrIndexBlock);
+            if(fzeroat(devFile, ptrIndexBlock * super->blockSize, super->blockSize) <= 0) {
+                std::perror("Write error");
+                return 0;
+            }
+            inode->ptrIndirect1 = ptrIndexBlock;
+        }
+        uint64_t *index = (uint64_t *) new char[super->blockSize];
+        if(freadat(devFile, index, inode->ptrIndirect1 * super->blockSize, super->blockSize) <= 0) {
+            std::perror("Read error");
+            delete[] index;
+            return 0;
+        }
+        if(index[block - 4] == 0) {
+            uint64_t ptrDataBlock = allocateBlock(devFile, super, BLK_FILE);
+            if(ptrDataBlock == 0) {
+                return 0;
+            }
+            std::printf("\tAllocate data block [%" PRIu64 "] at %#" PRIx64"\n", block, ptrDataBlock);
+            if(fzeroat(devFile, ptrDataBlock * super->blockSize, super->blockSize) <= 0) {
+                std::perror("Write error");
+                return 0;
+            }
+            index[block - 4] = ptrDataBlock;
+            if(fwriteat(devFile, index, inode->ptrIndirect1 * super->blockSize, super->blockSize) <= 0) {
+                std::perror("Write error");
+                delete[] index;
+                return 0;
+            }
+        }
+        uint64_t result = index[block - 4];
+        delete[] index;
+        return result;
+    } else {
+        std::printf("\tFailed to allocate data block [%" PRIu64 "], limits exceeded\n", block);
+        return 0;
+    }
+}
+
 }
