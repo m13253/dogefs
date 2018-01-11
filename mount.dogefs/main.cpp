@@ -558,8 +558,8 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    const char *fakeArgv[] = { "", "-d" };
-    fuse_args args = FUSE_ARGS_INIT(2, (char **) fakeArgv);
+    const char *fakeArgv[] = { "" };
+    fuse_args args = FUSE_ARGS_INIT(1, (char **) fakeArgv);
     fuse_chan *ch = fuse_mount(mountpoint.c_str(), &args);
     if(!ch) {
         std::fprintf(stderr, "Failed to mount filesystem.\n");
