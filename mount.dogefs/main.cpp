@@ -94,6 +94,42 @@ static void dogefs_getattr(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info
     }
 }
 
+static void dogefs_setattr(fuse_req_t req, fuse_ino_t ino, struct stat *attr, int to_set, struct fuse_file_info *) {
+    std::printf("setattr(..., %" PRIu64 ", %p, %#04x, ...)\n", ino, attr, to_set);
+    uint64_t realInode = ino == 1 ? g_super->ptrRootInode : ino;
+    Inode inode;
+    if(freadat(g_devFile, &inode, realInode * sizeof (Inode), sizeof (Inode)) <= 0) {
+        std::perror("Read error");
+        fuse_reply_err(req, EIO);
+    }
+    if(to_set & FUSE_SET_ATTR_MODE) {
+        inode.mode = attr->st_mode;
+    }
+    if(to_set & FUSE_SET_ATTR_UID) {
+        inode.uid = attr->st_uid;
+        inode.mode &= ~04000;
+    }
+    if(to_set & FUSE_SET_ATTR_GID) {
+        inode.gid = attr->st_gid;
+        inode.mode &= ~02000;
+    }
+    if(to_set & FUSE_SET_ATTR_SIZE) {
+        inode.size = std::min<uint64_t>(attr->st_size, g_super->blockSize * g_super->blockSize / sizeof (uint64_t));
+    }
+    if(to_set & FUSE_SET_ATTR_ATIME) {
+    }
+    if(to_set & FUSE_SET_ATTR_MTIME) {
+    }
+    if(to_set & FUSE_SET_ATTR_ATIME_NOW) {
+    }
+    if(to_set & FUSE_SET_ATTR_MTIME_NOW) {
+    }
+    if(fwriteat(g_devFile, &inode, realInode * sizeof (Inode), sizeof (Inode)) <= 0) {
+        std::perror("Write error");
+        fuse_reply_err(req, EIO);
+    }
+}
+
 static void dogefs_readdir(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off, struct fuse_file_info *) {
     std::printf("readdir(..., %" PRIu64 ", %" PRIu64 ", %" PRIu64 ")\n", ino, size, off);
     if(ino == 1) {
@@ -489,6 +525,7 @@ static void dogefs_create(fuse_req_t req, fuse_ino_t parent, const char *name, m
 static fuse_lowlevel_ops dogefs_oper = {
     .lookup  = dogefs_lookup,
     .getattr = dogefs_getattr,
+    .setattr = dogefs_setattr,
     .readdir = dogefs_readdir,
     .mkdir   = dogefs_mkdir,
     .unlink  = dogefs_unlink,
