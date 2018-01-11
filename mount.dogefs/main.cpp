@@ -59,7 +59,7 @@ static void dogefs_lookup(fuse_req_t req, fuse_ino_t parent, const char *name) {
     if(freadat(g_devFile, dir, dirBlock * g_super->blockSize, g_super->blockSize) <= 0) {
         perror("Read error");
         fuse_reply_err(req, EIO);
-        return;
+        goto end;
     }
     fuse_entry_param e;
     std::memset(&e, 0, sizeof e);
@@ -110,13 +110,13 @@ static void dogefs_readdir(fuse_req_t req, fuse_ino_t ino, size_t size, off_t of
         return;
     }
     uint64_t dirBlock = inode.ptrDirect[0];
+    std::string result;
     DirItem *dir = (DirItem *) new char[g_super->blockSize];
     if(freadat(g_devFile, dir, dirBlock * g_super->blockSize, g_super->blockSize) <= 0) {
         perror("Read error");
         fuse_reply_err(req, EIO);
-        return;
+        goto end;
     }
-    std::string result;
     for(size_t i = 0; i < g_super->blockSize / sizeof (DirItem); ++i) {
         if(dir[i].magic != DirItemMagic) {
             continue;
@@ -240,6 +240,62 @@ static void dogefs_mkdir(fuse_req_t req, fuse_ino_t parent, const char *name, mo
     fuse_reply_entry(req, &e);
 }
 
+static void dogefs_unlink(fuse_req_t req, fuse_ino_t parent, const char *name) {
+    std::printf("unlink(..., %" PRIu64 ", \"%s\")\n", parent, name);
+    if(parent == 1) {
+        parent = g_super->ptrRootInode;
+    }
+    Inode inode;
+    if(freadat(g_devFile, &inode, parent * sizeof (Inode), sizeof (Inode)) <= 0) {
+        perror("Read error");
+        fuse_reply_err(req, EIO);
+        return;
+    }
+    if((inode.mode & 0170000) != 0040000) {
+        fuse_reply_err(req, ENOTDIR);
+        return;
+    }
+    uint64_t dirBlock = inode.ptrDirect[0];
+    DirItem *dir = (DirItem *) new char[g_super->blockSize];
+    if(freadat(g_devFile, dir, dirBlock * g_super->blockSize, g_super->blockSize) <= 0) {
+        perror("Read error");
+        fuse_reply_err(req, EIO);
+        goto end;
+    }
+    fuse_entry_param e;
+    std::memset(&e, 0, sizeof e);
+    for(size_t i = 0; i < g_super->blockSize / sizeof (DirItem); ++i) {
+        if(dir[i].magic != DirItemMagic) {
+            continue;
+        }
+        if(strncmp(dir[i].filename, name, 32) == 0) {
+            Inode subInode;
+            if(freadat(g_devFile, &subInode, dir[i].inode * sizeof (Inode), sizeof (Inode)) <= 0) {
+                perror("Read error");
+                fuse_reply_err(req, EIO);
+                goto end;
+            }
+            if((inode.mode & 0170000) == 0040000) {
+                inode.nlink -= 1;
+            }
+            dir[i].magic = 0;
+        }
+    }
+    if(fwriteat(g_devFile, dir, dirBlock * g_super->blockSize, g_super->blockSize) <= 0) {
+        perror("Write error");
+        fuse_reply_err(req, EIO);
+        goto end;
+    }
+    if(fwriteat(g_devFile, &inode, parent * sizeof (Inode), sizeof (Inode)) <= 0) {
+        perror("Write error");
+        fuse_reply_err(req, EIO);
+        goto end;
+    }
+    fuse_reply_err(req, 0);
+end:
+    delete[] dir;
+}
+
 static void dogefs_open(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi) {
     std::printf("open(..., %" PRIu64 ", ...)\n", ino);
     fuse_reply_open(req, fi);
@@ -257,6 +313,8 @@ static fuse_lowlevel_ops dogefs_oper = {
     .open    = dogefs_open,
     .read    = dogefs_read,
     .mkdir   = dogefs_mkdir,
+    .unlink  = dogefs_unlink,
+    .rmdir   = dogefs_unlink,
 };
 
 int main(int argc, char *argv[]) {
